@@ -1,0 +1,304 @@
+30.01.2024                        Display Class                                1
+--------------------------------------------------------------------------------
+class-pool .
+
+
+
+
+class ZCL_TEST_BP_BLOCK_RULE_CONTEXT definition
+  public
+  final
+  create public .
+public section.
+  interfaces IF_BADI_INTERFACE .
+  interfaces IF_USMD_SSW_RULE_CNTX_PREPARE .
+
+protected section.
+
+private section.
+  methods GET_ELEMENT_ID
+    importing
+      !IV_CR_TYPE type USMD_CREQUEST_TYPE
+      !IV_NAME type IF_FDT_TYPES=>NAME
+    exporting
+      !EV_BRF_EXPR_ID type IF_FDT_TYPES=>ID .
+  methods READ_VENDOR
+    importing
+      !IV_CR_NUMBER type USMD_CREQUEST
+    exporting
+      !EV_BLOCK type CHAR10 .
+  methods READ_CREQUEST
+    importing
+      !IV_CR_NUMBER type USMD_CREQUEST
+    exporting
+      !ES_CREQUEST type USMD_S_CREQUEST .
+  methods READ_CR_OBJECTLIST
+    importing
+      !IO_MODEL type ref to IF_USMD_MODEL_EXT
+      !IV_CREQUEST_ID type USMD_CREQUEST
+    returning
+      value(RT_OBJLIST) type USMD_T_CREQUEST_ENTITY .
+endclass. "ZCL_TEST_BP_BLOCK_RULE_CONTEXT definition
+
+class ZCL_TEST_BP_BLOCK_RULE_CONTEXT implementation.
+
+  METHOD if_usmd_ssw_rule_cntx_prepare~prepare_rule_context.
+    DATA: lv_brf_expr_id TYPE if_fdt_types=>id.
+    DATA: ls_context     TYPE usmd_s_fdt_context_value.
+    DATA: lv_crequest    TYPE usmd_s_crequest.
+    DATA: ls_material    TYPE /mdgmm/_s_mm_pp_material.
+    FIELD-SYMBOLS: <value> TYPE any.
+* Prepare export parameters
+    CLEAR et_message.
+    CLEAR et_rule_context_value.
+    DATA: a, b.
+    a = 'X'.
+    DO.
+      IF a = b.
+        EXIT.
+      ENDIF.
+    ENDDO.
+* Read the one and only material of the CR
+    CALL METHOD read_vendor
+      EXPORTING
+        iv_cr_number = iv_cr_number
+      IMPORTING
+30.01.2024                        Display Class                                2
+--------------------------------------------------------------------------------
+        ev_block     = DATA(v_block).
+* Read the CR itself (to get the CR type
+    CALL METHOD read_crequest
+      EXPORTING
+        iv_cr_number = iv_cr_number
+      IMPORTING
+        es_crequest  = lv_crequest.
+* fill out the return table
+    get_element_id(
+      EXPORTING
+        iv_cr_type = lv_crequest-usmd_creq_type
+        iv_name    = 'BLOCK'
+      IMPORTING
+        ev_brf_expr_id = lv_brf_expr_id ).
+    ls_context-id = lv_brf_expr_id.
+    CREATE DATA ls_context-value TYPE char10.
+    ASSIGN  ls_context-value->* TO <value>.
+    <value> = v_block.
+    APPEND ls_context TO et_rule_context_value.
+    IF sy-subrc IS INITIAL.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD get_element_id.
+    DATA:
+      lv_application_id TYPE if_fdt_types=>id,
+      lo_brf_factory    TYPE REF TO if_fdt_factory,
+      lo_brf_query      TYPE REF TO if_fdt_query,
+      lt_selection      TYPE if_fdt_query=>ts_selection,
+      ls_selection      LIKE LINE OF lt_selection,
+      ls_obj_category   TYPE if_fdt_query=>s_object_category_sel,
+      lt_names          TYPE if_fdt_query=>ts_name,
+      ls_names          TYPE if_fdt_query=>s_name.
+*--------------------------------------------------------------------*
+    ASSERT iv_cr_type IS NOT INITIAL.
+    ASSERT iv_name    IS NOT INITIAL.
+* get the ID of the brf+ application depending on the CR type
+    lv_application_id = cl_usmd_wf_ssw_rule_service=>get_cr_type_app_id( iv_cr_t
+    IF lv_application_id IS INITIAL.
+      MESSAGE x000(usmd1).   "no brf+ application exists for this cr type
+    ENDIF.
+    lo_brf_factory = cl_fdt_factory=>if_fdt_factory~get_instance( ).
+* create a query object instance ...
+    lo_brf_query = lo_brf_factory->get_query(
+      iv_object_type      = if_fdt_constants=>gc_object_type_data_object
+      iv_data_object_type = if_fdt_constants=>gc_data_object_type_element ).
+* ... and define the selection criteria
+    ls_selection-queryfield = if_fdt_admin_data_query=>gc_fn_name.
+    ls_selection-sign       = 'I'.
+    ls_selection-option     = 'EQ'.
+    ls_selection-low        = iv_name.
+    INSERT ls_selection INTO TABLE lt_selection.
+    ls_selection-queryfield = if_fdt_admin_data_query=>gc_fn_application_id.
+    ls_selection-sign       = 'I'.
+    ls_selection-option     = 'EQ'.
+    ls_selection-low        = lv_application_id.
+    INSERT ls_selection INTO TABLE lt_selection.
+    ls_obj_category-system_objects      = abap_true.
+    ls_obj_category-customizing_objects = abap_true.
+    ls_obj_category-masterdata_objects  = abap_false.
+* select the data
+    lo_brf_query->select_data(
+      EXPORTING
+30.01.2024                        Display Class                                3
+--------------------------------------------------------------------------------
+        its_selection          = lt_selection
+        is_object_category_sel = ls_obj_category
+      IMPORTING
+        eta_data               = lt_names ).
+    READ TABLE lt_names INTO ls_names INDEX 1.
+    ev_brf_expr_id = ls_names-id.
+  ENDMETHOD.
+
+  METHOD read_crequest.
+    DATA: lr_model    TYPE REF TO if_usmd_model_ext.
+    DATA: lt_sel      TYPE usmd_ts_sel.
+    DATA: ls_sel      TYPE usmd_s_sel.
+    DATA: lt_crequest TYPE usmd_ts_crequest.
+    CONSTANTS: lc_incl  TYPE ddsign   VALUE 'I'.
+    CONSTANTS: lc_equal TYPE ddoption VALUE 'EQ'.
+    CLEAR: es_crequest.
+* Get read-only access to USMD model data
+    CALL METHOD cl_usmd_model_ext=>get_instance
+      EXPORTING
+        i_usmd_model = 'BP'"if_mdg_bs_mat_gen_c=>gc_model_mm
+      IMPORTING
+        eo_instance  = lr_model.
+* Read the CR itself (to get the CR type)
+    ls_sel-sign      = lc_incl.
+    ls_sel-option    = lc_equal.
+    ls_sel-fieldname = usmd0_cs_fld-crequest.
+    ls_sel-low       = iv_cr_number.
+    INSERT ls_sel INTO TABLE lt_sel.
+    CALL METHOD lr_model->read_char_value
+      EXPORTING
+        i_fieldname       = usmd0_cs_fld-crequest
+        it_sel            = lt_sel
+        if_use_edtn_slice = abap_false
+      IMPORTING
+        et_data           = lt_crequest.
+    READ TABLE lt_crequest INTO es_crequest INDEX 1.
+    ASSERT sy-subrc = 0. " CR not found
+  ENDMETHOD.
+
+  METHOD read_cr_objectlist.
+    DATA lt_sel  TYPE usmd_ts_sel.
+    DATA ls_sel  TYPE usmd_s_sel.
+    ls_sel-sign      = 'I'.
+    ls_sel-option    = 'EQ'.
+    ls_sel-fieldname = usmd0_cs_fld-crequest.
+    ls_sel-low       = iv_crequest_id.
+    INSERT ls_sel INTO TABLE lt_sel.
+    CALL METHOD io_model->read_char_value
+      EXPORTING
+        i_fieldname       = usmd0_cs_fld-crequest
+        it_sel            = lt_sel
+        if_use_edtn_slice = abap_false
+      IMPORTING
+        et_data           = rt_objlist.
+  ENDMETHOD.
+
+  METHOD read_vendor.
+    DATA: lr_model    TYPE REF TO if_usmd_model_ext.
+    DATA: lt_sel      TYPE usmd_ts_sel.
+    DATA: ls_sel      TYPE usmd_s_sel.
+    DATA: lt_objlist  TYPE usmd_t_crequest_entity.
+    DATA: ls_objlist  TYPE usmd_s_crequest_entity.
+    DATA: lv_bp    TYPE bu_partner.
+30.01.2024                        Display Class                                4
+--------------------------------------------------------------------------------
+    DATA: lr_data     TYPE REF TO data.
+    FIELD-SYMBOLS: <lt_data> TYPE SORTED TABLE.
+    FIELD-SYMBOLS: <ls_data> TYPE any.
+    CONSTANTS: lc_incl  TYPE ddsign   VALUE 'I'.
+    CONSTANTS: lc_equal TYPE ddoption VALUE 'EQ'.
+*    CLEAR: es_material.
+* Get read-only access to USMD model data
+    CALL METHOD cl_usmd_model_ext=>get_instance
+      EXPORTING
+        i_usmd_model = 'BP'
+      IMPORTING
+        eo_instance  = lr_model.
+* Read object list of CR and get the one and only material:
+* Get the key of the (type 1) entity BP_HEADER
+* from the object list of this CR
+    ls_sel-sign      = lc_incl.
+    ls_sel-option    = lc_equal.
+    ls_sel-fieldname = usmd0_cs_fld-crequest.
+    ls_sel-low       = iv_cr_number.
+    INSERT ls_sel INTO TABLE lt_sel.
+    CALL METHOD lr_model->read_char_value
+      EXPORTING
+        i_fieldname       = usmd0_cs_fld-crequest
+        it_sel            = lt_sel
+        if_use_edtn_slice = abap_false
+      IMPORTING
+        et_data           = lt_objlist.
+    READ TABLE lt_objlist INTO ls_objlist INDEX 1.
+    ASSERT sy-subrc = 0. " CR not found or contains no vendor
+    lv_bp = ls_objlist-usmd_value.
+    DATA: v_entity TYPE usmd_fieldname VALUE 'BP_VENGEN'.
+* Prepare result table for Vendor read
+    CALL METHOD lr_model->create_data_reference
+      EXPORTING
+        i_fieldname = v_entity
+        i_struct    = lr_model->gc_struct_key_attr
+        if_table    = abap_true
+        i_tabtype   = lr_model->gc_tabtype_sorted
+      IMPORTING
+        er_data     = lr_data.
+    ASSIGN lr_data->* TO <lt_data>.
+* Read Vendor via vendor number and Change Request ID
+    CLEAR lt_sel.
+    ls_sel-fieldname = 'BP_HEADER'.
+    ls_sel-sign   = lc_incl.
+    ls_sel-option = lc_equal.
+    ls_sel-low    = lv_bp.
+    INSERT ls_sel INTO TABLE lt_sel.
+    ls_sel-fieldname = usmd0_cs_fld-crequest.
+    ls_sel-low       = iv_cr_number.
+    INSERT ls_sel INTO TABLE lt_sel.
+    CALL METHOD lr_model->read_char_value
+      EXPORTING
+        i_fieldname       = v_entity
+        it_sel            = lt_sel
+        i_readmode        = if_usmd_model_ext=>gc_readmode_default
+        if_use_edtn_slice = abap_false
+      IMPORTING
+        et_data           = <lt_data>.
+* Return the one and only result
+    READ TABLE <lt_data> ASSIGNING <ls_data> INDEX 1.
+    ASSIGN COMPONENT 'SPERR' OF STRUCTURE <ls_data> TO FIELD-SYMBOL(<v_block>).
+    IF <v_block> IS ASSIGNED AND <v_block> IS NOT INITIAL.
+30.01.2024                        Display Class                                5
+--------------------------------------------------------------------------------
+      ev_block = 'VENGEN'.
+      EXIT.
+    ENDIF.
+    v_entity = 'BP_COMPNY'.
+* Prepare result table for Vendor read
+    CALL METHOD lr_model->create_data_reference
+      EXPORTING
+        i_fieldname = v_entity
+        i_struct    = lr_model->gc_struct_key_attr
+        if_table    = abap_true
+        i_tabtype   = lr_model->gc_tabtype_sorted
+      IMPORTING
+        er_data     = lr_data.
+    ASSIGN lr_data->* TO <lt_data>.
+* Read Vendor via vendor number and Change Request ID
+    CLEAR lt_sel.
+    ls_sel-fieldname = 'BP_HEADER'.
+    ls_sel-sign   = lc_incl.
+    ls_sel-option = lc_equal.
+    ls_sel-low    = lv_bp.
+    INSERT ls_sel INTO TABLE lt_sel.
+    ls_sel-fieldname = usmd0_cs_fld-crequest.
+    ls_sel-low       = iv_cr_number.
+    INSERT ls_sel INTO TABLE lt_sel.
+    CALL METHOD lr_model->read_char_value
+      EXPORTING
+        i_fieldname       = v_entity
+        it_sel            = lt_sel
+        i_readmode        = if_usmd_model_ext=>gc_readmode_default
+        if_use_edtn_slice = abap_false
+      IMPORTING
+        et_data           = <lt_data>.
+    DATA: v_cond TYPE string VALUE 'SPERR_B'.
+* Return the one and only result
+    READ TABLE <lt_data> ASSIGNING <ls_data> with KEY (v_cond) = 'X' .
+    IF sy-subrc IS INITIAL.
+      ev_block = 'COMPNY'.
+    ENDIF.
+*    ASSERT sy-subrc = 0. " CR not found or contains no material
+*    MOVE-CORRESPONDING <ls_data> TO es_material.
+  ENDMETHOD.
+endclass. "ZCL_TEST_BP_BLOCK_RULE_CONTEXT implementation
